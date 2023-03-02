@@ -36,9 +36,11 @@ except ImportError:
     raise ImportError("Please install APEX from https://github.com/nvidia/apex")
 
 
-#torchrun --nproc_per_node=1 main.py --batch-size 32 --mode benchmark-training --benchmark-warmup 100 --benchmark-iterations 200 --data /coco
+#torchrun --nproc_per_node=1 main.py --batch-size 32 --mode benchmark-training --benchmark-warmup 100 --benchmark-iterations 200 --data /coco --json-summary /results/log_a100_fp16.log
 #nsys profile --show-output=true --export sqlite -o /results/test python main.py --batch-size 32 --mode benchmark-training --benchmark-warmup 100 --benchmark-iterations 200 --data /coco --no-amp --profile
 #docker run --rm -it --gpus=all --ipc=host -v /home/hpc/DeepLearningExamples/PyTorch/Segmentation/MaskRCNN/data:/coco -v /home/hpc/DeepLearningExamples/PyTorch/results:/results nvidia_universal_benchmark 
+#docker run --rm -it --gpus device=0 --ipc=host -v /home/hpc/DeepLearningExamples/PyTorch/Segmentation/MaskRCNN/data:/coco -v /home/hpc/DeepLearningExamples/PyTorch/results:/results nvidia_universal_benchmark 
+
 
 def make_parser():
     parser = ArgumentParser(description="Train Single Shot MultiBox Detector"
@@ -119,10 +121,35 @@ def make_parser():
 
     return parser
 
+from threading import Thread
+import subprocess
+import re
+import time
+
+total_GPU = 0
+total_times = 0
+
+def GPU_Usage(running):
+    global total_GPU, total_times
+    command = 'nvidia-smi'
+    while True:
+        p = subprocess.check_output(command)
+        ram_using = re.findall(r'\b\d+MiB+ /', str(p))[0][:-5]
+        total_GPU += int(ram_using)
+        total_times += 1
+        if total_GPU == 0:
+            total_times -= 1
+        if total_GPU == 0 or not running():
+            break
+        time.sleep(1)
 
 def train(train_loop_func, logger, args):
+    global total_GPU, total_times
     # Check that GPUs are actually available
     use_cuda = not args.no_cuda
+
+    running_threads = True
+    threads = Thread(target=GPU_Usage, args=(lambda : running_threads, ))
 
     # Setup multi-GPU if necessary
     args.distributed = False
@@ -236,8 +263,8 @@ def train(train_loop_func, logger, args):
 
     scaler = torch.cuda.amp.GradScaler(enabled=args.amp)
 
+    threads.start()
     for epoch in range(start_epoch, args.epochs):
-
         start_epoch_time = time.time()
         if args.profile:
             pyprof2.init()
@@ -274,7 +301,9 @@ def train(train_loop_func, logger, args):
             torch.save(obj, save_path)
             logger.log('model path', save_path)
         train_dataloader.reset()
-    DLLogger.log((), { 'total time': total_time })
+    running_threads = False
+    threads.join()
+    DLLogger.log((), { 'total time': total_time, 'total_GPU': total_GPU/total_times if total_times != 0 else 0 })
     logger.log_summary()
 
 
