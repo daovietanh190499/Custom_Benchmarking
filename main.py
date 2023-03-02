@@ -25,7 +25,7 @@ import dllogger as DLLogger
 
 from train import train_loop, load_checkpoint, benchmark_train_loop, benchmark_inference_loop
 from evaluate import evaluate
-
+import wandb
 import torch.cuda.profiler as profiler
 import pyprof2
 
@@ -38,8 +38,8 @@ except ImportError:
 
 #torchrun --nproc_per_node=1 main.py --batch-size 32 --mode benchmark-training --benchmark-warmup 100 --benchmark-iterations 200 --data /coco --json-summary /results/log_a100_fp16.log
 #nsys profile --show-output=true --export sqlite -o /results/test python main.py --batch-size 32 --mode benchmark-training --benchmark-warmup 100 --benchmark-iterations 200 --data /coco --no-amp --profile
-#docker run --rm -it --gpus=all --ipc=host -v /home/hpc/DeepLearningExamples/PyTorch/Segmentation/MaskRCNN/data:/coco -v /home/hpc/DeepLearningExamples/PyTorch/results:/results nvidia_universal_benchmark 
-#docker run --rm -it --gpus device=0 --ipc=host -v /home/hpc/DeepLearningExamples/PyTorch/Segmentation/MaskRCNN/data:/coco -v /home/hpc/DeepLearningExamples/PyTorch/results:/results nvidia_universal_benchmark 
+#docker run --rm -it --gpus=all --ipc=host -v /home/hpc/DeepLearningExamples/PyTorch/Segmentation/MaskRCNN/data:/coco -v /home/hpc/DeepLearningExamples/PyTorch/results:/results nvidia_universal_benchmark
+#docker run --rm -it --gpus device=0 --ipc=host -v /home/hpc/DeepLearningExamples/PyTorch/Segmentation/MaskRCNN/data:/coco -v /home/hpc/DeepLearningExamples/PyTorch/results:/results nvidia_universal_benchmark
 
 
 def make_parser():
@@ -115,7 +115,7 @@ def make_parser():
     parser.add_argument('--local_rank', default=os.getenv('LOCAL_RANK',0), type=int,
                         help='Used for multi-process training. Can either be manually set ' +
                              'or automatically set by using \'python -m multiproc\'.')
-    
+
     parser.add_argument('--profile', dest='profile', action="store_true",
                         help='Used for profiling GPU')
 
@@ -191,8 +191,8 @@ def train(train_loop_func, logger, args):
     # MUST HAVE PARAMETER
     forward_info = {
         'is_inference': False,
-        'no_cuda':args.no_cuda, 
-        'data_layout':args.data_layout, 
+        'no_cuda':args.no_cuda,
+        'data_layout':args.data_layout,
         'mean':mean,
         'std':std,
         'cocoGt': cocoGt,
@@ -207,15 +207,15 @@ def train(train_loop_func, logger, args):
     model = SSD300(backbone=ResNet(backbone=args.backbone,
                                     backbone_path=args.backbone_path,
                                     weights=args.torchvision_weights_version))
-    
+
     loss_func = Loss(dboxes)
 
     optimizer = torch.optim.SGD(tencent_trick(model), lr=args.learning_rate,
                                 momentum=args.momentum, weight_decay=args.weight_decay)
-    
+
     scheduler = MultiStepLR(optimizer=optimizer, milestones=args.multistep, gamma=0.1)
     #================================================================================================================================================================
-    
+
     start_epoch = 0
     iteration = 0
 
@@ -243,13 +243,13 @@ def train(train_loop_func, logger, args):
 
     # common train/inference config for all types of model
     class RunInfo:
-        amp= args.amp 
-        warmup =  args.warmup 
-        learning_rate =  args.learning_rate 
-        local_rank =  args.local_rank 
-        benchmark_warmup =  args.benchmark_warmup 
-        benchmark_iterations =  args.benchmark_iterations 
-        batch_size =  args.batch_size 
+        amp= args.amp
+        warmup =  args.warmup
+        learning_rate =  args.learning_rate
+        local_rank =  args.local_rank
+        benchmark_warmup =  args.benchmark_warmup
+        benchmark_iterations =  args.benchmark_iterations
+        batch_size =  args.batch_size
         eval_batch_size =  args.eval_batch_size
         N_gpu = args.N_gpu
         distributed =  args.distributed
@@ -333,6 +333,7 @@ def log_params(logger, args):
 if __name__ == "__main__":
     parser = make_parser()
     args = parser.parse_args()
+    wandb.init(project="benchmark", config=args)
     args.local_rank = int(os.environ.get('LOCAL_RANK', args.local_rank))
     if args.local_rank == 0:
         os.makedirs('./models', exist_ok=True)
