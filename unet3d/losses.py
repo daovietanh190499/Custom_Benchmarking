@@ -76,10 +76,13 @@ class DiceCELoss(nn.Module):
                          include_background=include_background)
         self.cross_entropy = nn.CrossEntropyLoss()
 
-    def forward(self, y_pred, y_true):
+    def forward(self, result):
+        y_pred, y_true, ga_steps = result
         cross_entropy = self.cross_entropy(y_pred, torch.squeeze(y_true, dim=1).long())
         dice = torch.mean(1.0 - self.dice(y_pred, y_true))
-        return (dice + cross_entropy) / 2
+        loss = (dice + cross_entropy) / 2
+        loss /= ga_steps
+        return loss
 
 
 class DiceScore:

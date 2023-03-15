@@ -40,11 +40,11 @@ except ImportError:
 #nsys profile --show-output=true --export sqlite -o /results/test python main.py --batch-size 32 --mode benchmark-training --benchmark-warmup 100 --benchmark-iterations 200 --data /coco --no-amp --profile
 #docker run --rm -it --gpus=all --ipc=host -v /home/hpc/DeepLearningExamples/PyTorch/Segmentation/MaskRCNN/data:/coco -v /home/hpc/DeepLearningExamples/PyTorch/results:/results nvidia_universal_benchmark
 #docker run --rm -it --gpus device=0 --ipc=host -v /home/hpc/DeepLearningExamples/PyTorch/Segmentation/MaskRCNN/data:/coco -v /home/hpc/DeepLearningExamples/PyTorch/results:/results nvidia_universal_benchmark
-
+#torchrun --nproc_per_node=1 main.py --model Unet3D --batch-size 32 --mode benchmark-training --benchmark-warmup 100 --benchmark-iterations 200 --data /data --json-summary /results/log_unet3d_a100_fp16.log
 
 def make_parser():
     parser = ArgumentParser(description="GPU Custom Benchmark")
-    parser.add_argument('--model', '-d', type=str, default='SSD300', required=True,
+    parser.add_argument('--model', '-md', type=str, default='SSD300', required=True,
                         help='name of model')
     parser.add_argument('--data', '-d', type=str, default='/coco', required=True,
                         help='path to test and training data files')
@@ -232,13 +232,14 @@ def train(train_loop_func, logger, args):
             'val_input_shape': [128, 128, 128],
             'overlap': 0.5,
             'world_size': args.world_size,
+            'ga_steps': 1,
             'is_inference': False,
             'no_cuda': args.no_cuda,
             'score_fn': DiceScore(to_onehot_y=True, use_argmax=True, layout='NCDHW', include_background=False)
         }
 
         train_dataloader, val_dataloader = get_data_loaders(data_dir=args.data,
-                                                            loader="Pytorch",
+                                                            loader="pytorch",
                                                             input_shape=[128, 128, 128],
                                                             val_input_shape=forward_info['val_input_shape'],
                                                             layout='NCDHW',
