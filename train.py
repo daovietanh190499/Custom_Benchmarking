@@ -42,7 +42,7 @@ def benchmark_train_loop(model, model_func, loss_func, scaler, epoch, optim, tra
     start_time = None
     # tensor for results
     result_ = torch.zeros((1,)).cuda()
-    for nbatch, data in enumerate(loop(train_dataloader)):
+    for nbatch, data in enumerate(loop(train_dataloader, run_info.reset_data)):
         if nbatch >= run_info.benchmark_warmup:
             torch.cuda.synchronize()
             start_time = time.time()

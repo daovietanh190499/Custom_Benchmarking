@@ -40,7 +40,7 @@ except ImportError:
 #nsys profile --show-output=true --export sqlite -o /results/test python main.py --batch-size 32 --mode benchmark-training --benchmark-warmup 100 --benchmark-iterations 200 --data /coco --no-amp --profile
 #docker run --rm -it --gpus=all --ipc=host -v /home/hpc/DeepLearningExamples/PyTorch/Segmentation/MaskRCNN/data:/coco -v /home/hpc/DeepLearningExamples/PyTorch/results:/results nvidia_universal_benchmark
 #docker run --rm -it --gpus device=0 --ipc=host -v /home/hpc/DeepLearningExamples/PyTorch/Segmentation/MaskRCNN/data:/coco -v /home/hpc/DeepLearningExamples/PyTorch/results:/results nvidia_universal_benchmark
-#torchrun --nproc_per_node=1 main.py --model Unet3D --batch-size 32 --mode benchmark-training --benchmark-warmup 100 --benchmark-iterations 200 --data /data --json-summary /results/log_unet3d_a100_fp16.log
+#torchrun --nproc_per_node=1 main.py --model Unet3D --batch-size 2 --eval-batch-size 1 --mode benchmark-training --benchmark-warmup 100 --benchmark-iterations 200 --data /data --json-summary /results/log_unet3d_a100_fp16.log
 
 def make_parser():
     parser = ArgumentParser(description="GPU Custom Benchmark")
@@ -299,6 +299,7 @@ def train(train_loop_func, logger, args):
         eval_batch_size =  args.eval_batch_size
         N_gpu = args.N_gpu
         distributed =  args.distributed
+        reset_data = args.model == 'SSD300'
     run_info = RunInfo()
 
     if args.mode == 'evaluation':
@@ -351,7 +352,8 @@ def train(train_loop_func, logger, args):
             save_path = os.path.join(args.save, f'epoch_{epoch}.pt')
             torch.save(obj, save_path)
             logger.log('model path', save_path)
-        train_dataloader.reset()
+        if run_info.reset_data:
+            train_dataloader.reset()
     running_threads = False
     threads.join()
     DLLogger.log((), { 'total time': total_time, 'total_GPU': total_GPU/total_times if total_times != 0 else 0 })

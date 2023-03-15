@@ -12,6 +12,8 @@ class Unet3D(nn.Module):
     def __init__(self, in_channels, n_class, normalization, activation, weights_init_scale=1.0):
         super(Unet3D, self).__init__()
 
+        print("Load model U-Net 3D")
+
         filters = [32, 64, 128, 256, 320]
         self.filters = filters
 

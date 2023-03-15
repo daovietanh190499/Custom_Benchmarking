@@ -56,6 +56,8 @@ class SSD300(nn.Module):
     def __init__(self, backbone=ResNet('resnet50')):
         super().__init__()
 
+        print("Load model SSD300")
+
         self.feature_extractor = backbone
 
         self.label_num = 81  # number of COCO classes
