@@ -126,6 +126,7 @@ from threading import Thread
 import subprocess
 import re
 import time
+from torchsummary import summary
 
 total_GPU = 0
 total_times = 0
@@ -210,6 +211,7 @@ def train(train_loop_func, logger, args):
         model = SSD300(backbone=ResNet(backbone=args.backbone,
                                         backbone_path=args.backbone_path,
                                         weights=args.torchvision_weights_version))
+        summary(model.cuda(), (3,300,300), device='cuda')
 
         loss_func = Loss(dboxes)
 
