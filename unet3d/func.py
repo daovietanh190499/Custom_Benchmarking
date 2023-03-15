@@ -126,7 +126,7 @@ def model_func(model, data, forward_info):
             mode="gaussian",
             padding_val=-2.2
         )
-    return output, label
+    return output, label, forward_info['ga_steps']
 
 def post_process(result, data, forward_info):
     output, label = result
