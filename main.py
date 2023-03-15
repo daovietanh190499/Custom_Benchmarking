@@ -43,8 +43,9 @@ except ImportError:
 
 
 def make_parser():
-    parser = ArgumentParser(description="Train Single Shot MultiBox Detector"
-                                        " on COCO")
+    parser = ArgumentParser(description="GPU Custom Benchmark")
+    parser.add_argument('--model', '-d', type=str, default='SSD300', required=True,
+                        help='name of model')
     parser.add_argument('--data', '-d', type=str, default='/coco', required=True,
                         help='path to test and training data files')
     parser.add_argument('--epochs', '-e', type=int, default=65,
@@ -155,6 +156,7 @@ def train(train_loop_func, logger, args):
     args.distributed = False
     if 'WORLD_SIZE' in os.environ:
         args.distributed = int(os.environ['WORLD_SIZE']) > 1
+    args.world_size = int(os.environ['WORLD_SIZE'])
 
     if args.distributed:
         torch.cuda.set_device(args.local_rank)
@@ -177,45 +179,88 @@ def train(train_loop_func, logger, args):
     # Setup data, defaults
     # special running config for special type of model, model self-defined
     #================================================================================================================================================================
-    from ssd.model import SSD300, ResNet, Loss
-    from ssd.utils import dboxes300_coco, Encoder, tencent_trick, generate_mean_std
-    from ssd.data import get_train_dataloader, get_val_dataset, get_val_dataloader, get_coco_ground_truth
-    from ssd.func import model_func, post_process, eval_func
+    if args.model == "SSD300":
+        from ssd.model import SSD300, ResNet, Loss
+        from ssd.utils import dboxes300_coco, Encoder, tencent_trick, generate_mean_std
+        from ssd.data import get_train_dataloader, get_val_dataset, get_val_dataloader, get_coco_ground_truth
+        from ssd.func import model_func, post_process, eval_func
 
-    mean, std = generate_mean_std(args)
-    cocoGt = get_coco_ground_truth(args)
-    val_dataset = get_val_dataset(args)
-    dboxes = dboxes300_coco()
-    encoder = Encoder(dboxes)
+        mean, std = generate_mean_std(args)
+        cocoGt = get_coco_ground_truth(args)
+        val_dataset = get_val_dataset(args)
+        dboxes = dboxes300_coco()
+        encoder = Encoder(dboxes)
 
-    # MUST HAVE PARAMETER
-    forward_info = {
-        'is_inference': False,
-        'no_cuda':args.no_cuda,
-        'data_layout':args.data_layout,
-        'mean':mean,
-        'std':std,
-        'cocoGt': cocoGt,
-        'val_dataset': val_dataset,
-        'encoder': encoder
-    }
+        # MUST HAVE PARAMETER
+        forward_info = {
+            'is_inference': False,
+            'no_cuda':args.no_cuda,
+            'data_layout':args.data_layout,
+            'mean':mean,
+            'std':std,
+            'cocoGt': cocoGt,
+            'val_dataset': val_dataset,
+            'encoder': encoder
+        }
 
-    train_dataloader = get_train_dataloader(args, args.seed - 2**31)
+        train_dataloader = get_train_dataloader(args, args.seed - 2**31)
 
-    val_dataloader = get_val_dataloader(val_dataset, args)
+        val_dataloader = get_val_dataloader(val_dataset, args)
 
-    model = SSD300(backbone=ResNet(backbone=args.backbone,
-                                    backbone_path=args.backbone_path,
-                                    weights=args.torchvision_weights_version))
+        model = SSD300(backbone=ResNet(backbone=args.backbone,
+                                        backbone_path=args.backbone_path,
+                                        weights=args.torchvision_weights_version))
 
-    loss_func = Loss(dboxes)
+        loss_func = Loss(dboxes)
 
-    optimizer = torch.optim.SGD(tencent_trick(model), lr=args.learning_rate,
-                                momentum=args.momentum, weight_decay=args.weight_decay)
+        optimizer = torch.optim.SGD(tencent_trick(model), lr=args.learning_rate,
+                                    momentum=args.momentum, weight_decay=args.weight_decay)
 
-    scheduler = MultiStepLR(optimizer=optimizer, milestones=args.multistep, gamma=0.1)
+        scheduler = MultiStepLR(optimizer=optimizer, milestones=args.multistep, gamma=0.1)
     #================================================================================================================================================================
 
+    #U-Net3D
+    #================================================================================================================================================================
+    elif args.model == "Unet3D":
+        from unet3d.unet3d import Unet3D
+        from unet3d.losses import DiceCELoss, DiceScore
+        from unet3d.dataloader import get_data_loaders
+        from unet3d.func import model_func, post_process, eval_func
+
+        # MUST HAVE PARAMETER
+        forward_info = {
+            'val_input_shape': [128, 128, 128],
+            'overlap': 0.5,
+            'world_size': args.world_size,
+            'is_inference': False,
+            'no_cuda': args.no_cuda,
+            'score_fn': DiceScore(to_onehot_y=True, use_argmax=True, layout='NCDHW', include_background=False)
+        }
+
+        train_dataloader, val_dataloader = get_data_loaders(data_dir=args.data,
+                                                            loader="Pytorch",
+                                                            input_shape=[128, 128, 128],
+                                                            val_input_shape=forward_info['val_input_shape'],
+                                                            layout='NCDHW',
+                                                            oversampling=0.4,
+                                                            seed=args.seed,
+                                                            batch_size=args.batch_size,
+                                                            eval_batch_size =  args.eval_batch_size,
+                                                            num_workers=args.num_workers,
+                                                            benchmark='benchmark' in args.mode,
+                                                            num_shards=args.world_size, global_rank=args.local_rank)
+
+        model = Unet3D(1, 3, normalization='instancenorm', activation='relu')
+
+        loss_func = DiceCELoss(to_onehot_y=True, use_softmax=True, layout='NCDHW',
+                            include_background=False)
+
+        optimizer = torch.optim.SGD(model.parameters(), lr=args.learning_rate, momentum=args.momentum, nesterov=True,
+                        weight_decay=args.weight_decay)
+
+        scheduler = MultiStepLR(optimizer=optimizer, milestones=args.multistep, gamma=0.1)
+
+    #===================================================================================================================================================================
     start_epoch = 0
     iteration = 0
 
@@ -256,6 +301,7 @@ def train(train_loop_func, logger, args):
     run_info = RunInfo()
 
     if args.mode == 'evaluation':
+        forward_info['is_inference'] = True
         acc = evaluate(model, model_func, post_process, eval_func, val_dataloader, run_info, forward_info)
         if args.local_rank == 0:
             print('Model precision {} mAP'.format(acc))
@@ -266,6 +312,8 @@ def train(train_loop_func, logger, args):
     threads.start()
     for epoch in range(start_epoch, args.epochs):
         start_epoch_time = time.time()
+        if args.distributed and args.model=="Unet3D":
+            train_dataloader.sampler.set_epoch(epoch)
         if args.profile:
             pyprof2.init()
             with torch.autograd.profiler.emit_nvtx():
@@ -281,7 +329,9 @@ def train(train_loop_func, logger, args):
             logger.update_epoch_time(epoch, end_epoch_time)
 
         if epoch in args.evaluation:
+            forward_info['is_inference'] = True
             acc = evaluate(model, model_func, post_process, eval_func, val_dataloader, run_info, forward_info)
+            forward_info['is_inference'] = False
 
             if args.local_rank == 0:
                 logger.update_epoch(epoch, acc)
