@@ -302,6 +302,7 @@ def train(train_loop_func, logger, args):
         N_gpu = args.N_gpu
         distributed =  args.distributed
         reset_data = args.model == 'SSD300'
+        profile = args.profile
     run_info = RunInfo()
 
     if args.mode == 'evaluation':

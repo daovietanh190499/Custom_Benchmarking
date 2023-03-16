@@ -194,7 +194,7 @@ def split_eval_data(x_val, y_val, num_shards, shard_id):
 
 
 def get_data_split(path: str, num_shards: int, shard_id: int):
-    with open("evaluation_cases.txt", "r") as f:
+    with open("unet3d/evaluation_cases.txt", "r") as f:
         val_cases_list = f.readlines()
     val_cases_list = [case.rstrip("\n") for case in val_cases_list]
     imgs = load_data(path, "*_x.npy")

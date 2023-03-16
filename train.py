@@ -43,13 +43,18 @@ def benchmark_train_loop(model, model_func, loss_func, scaler, epoch, optim, tra
     # tensor for results
     result_ = torch.zeros((1,)).cuda()
     for nbatch, data in enumerate(loop(train_dataloader, run_info.reset_data)):
-        if nbatch >= run_info.benchmark_warmup:
+        if iteration >= run_info.benchmark_warmup:
             torch.cuda.synchronize()
             start_time = time.time()
+        if iteration == run_info.benchmark_warmup + 1 and run_info.profile:
+            profiler.start()
 
         with torch.cuda.amp.autocast(enabled=run_info.amp):
             result = model_func(model, data, forward_info)
             loss = loss_func(result)
+        
+        if iteration == run_info.benchmark_warmup + 1 and run_info.profile:
+            profiler.stop()
 
         if run_info.warmup is not None:
             warmup(optim, run_info.warmup, iteration, run_info.learning_rate)
@@ -59,18 +64,20 @@ def benchmark_train_loop(model, model_func, loss_func, scaler, epoch, optim, tra
         scaler.update()
         optim.zero_grad()
 
-        if nbatch >= run_info.benchmark_warmup + run_info.benchmark_iterations:
+        if iteration >= run_info.benchmark_warmup + run_info.benchmark_iterations:
             break
 
-        if nbatch >= run_info.benchmark_warmup:
+        if iteration >= run_info.benchmark_warmup:
             torch.cuda.synchronize()
             logger.update(run_info.batch_size*run_info.N_gpu, time.time() - start_time)
+        iteration += 1
 
     result_.data[0] = logger.print_result()
     if run_info.N_gpu > 1:
         torch.distributed.reduce(result_, 0)
     if run_info.local_rank == 0:
         print('Training performance = {} FPS'.format(float(result_.data[0])))
+    return iteration
 
 
 def loop(dataloader, reset=True):
