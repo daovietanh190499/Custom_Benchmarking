@@ -124,6 +124,8 @@ def make_parser():
                         help='Used for profiling GPU')
     parser.add_argument('--profile-type', type=str, dest='profile_type', default='tensorboard',
                         choices=['nsys', 'tensorboard'])
+    parser.add_argument('--wandb', dest='wandb', action="store_true",
+                        help='Used for WanDB Logging')
 
     return parser
 
@@ -400,7 +402,8 @@ def log_params(logger, args):
 if __name__ == "__main__":
     parser = make_parser()
     args = parser.parse_args()
-    wandb.init(project="benchmark", config=args)
+    if args.wandb:
+        wandb.init(project="benchmark", config=args)
     args.local_rank = int(os.environ.get('LOCAL_RANK', args.local_rank))
     if args.local_rank == 0:
         os.makedirs('./models', exist_ok=True)
