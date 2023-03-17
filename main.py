@@ -59,9 +59,11 @@ def make_parser():
                         help='manually set random seed for torch')
     parser.add_argument('--checkpoint', type=str, default=None,
                         help='path to model checkpoint file')
+    #==================
     parser.add_argument('--torchvision-weights-version', type=str, default="IMAGENET1K_V2",
                         choices=['IMAGENET1K_V1', 'IMAGENET1K_V2', 'DEFAULT'],
                         help='The torchvision weights version to use when --checkpoint is not specified')
+    #==================
     parser.add_argument('--save', type=str, default=None,
                         help='save model checkpoints in the specified directory')
     parser.add_argument('--mode', type=str, default='training',
@@ -84,7 +86,7 @@ def make_parser():
                         help='Run N iterations while benchmarking (ignored when training and validation)')
     parser.add_argument('--benchmark-warmup', type=int, default=20, metavar='N',
                         help='Number of warmup iterations for benchmarking')
-
+    #==================================
     parser.add_argument('--backbone', type=str, default='resnet50',
                         choices=['resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152'])
     parser.add_argument('--backbone-path', type=str, default=None,
@@ -92,6 +94,7 @@ def make_parser():
                              ' backbone model declared with the --backbone argument.'
                              ' When it is not provided, pretrained model from torchvision'
                              ' will be downloaded.')
+    #==================================
     parser.add_argument('--num-workers', type=int, default=8)
     parser.add_argument("--amp", dest='amp', action="store_true",
                         help="Enable Automatic Mixed Precision (AMP).")
@@ -103,8 +106,10 @@ def make_parser():
     parser.add_argument("--no-allow-tf32", dest='allow_tf32', action="store_false",
                         help="Disable TF32 computations.")
     parser.set_defaults(allow_tf32=True)
+    #==================
     parser.add_argument('--data-layout', default="channels_last", choices=['channels_first', 'channels_last'],
                         help="Model data layout. It's recommended to use channels_first with --no-amp")
+    #==================
     parser.add_argument('--log-interval', type=int, default=20,
                         help='Logging interval.')
     parser.add_argument('--json-summary', type=str, default=None,
@@ -201,7 +206,7 @@ def train(train_loop_func, logger, args):
 
         # MUST HAVE PARAMETER
         forward_info = {
-            'is_inference': False,
+            'is_inference': args.mode in [ 'evaluation', 'benchmark-inference'],
             'no_cuda':args.no_cuda,
             'data_layout':args.data_layout,
             'mean':mean,
@@ -242,7 +247,7 @@ def train(train_loop_func, logger, args):
             'overlap': 0.5,
             'world_size': args.world_size,
             'ga_steps': 1,
-            'is_inference': False,
+            'is_inference': args.mode in [ 'evaluation', 'benchmark-inference'],
             'no_cuda': args.no_cuda,
             'score_fn': DiceScore(to_onehot_y=True, use_argmax=True, layout='NCDHW', include_background=False)
         }
@@ -315,7 +320,6 @@ def train(train_loop_func, logger, args):
     run_info = RunInfo()
 
     if args.mode == 'evaluation':
-        forward_info['is_inference'] = True
         acc = evaluate(model, model_func, post_process, eval_func, val_dataloader, run_info, forward_info)
         if args.local_rank == 0:
             print('Model precision {} mAP'.format(acc))
@@ -342,9 +346,7 @@ def train(train_loop_func, logger, args):
             logger.update_epoch_time(epoch, end_epoch_time)
 
         if epoch in args.evaluation:
-            forward_info['is_inference'] = True
             acc = evaluate(model, model_func, post_process, eval_func, val_dataloader, run_info, forward_info)
-            forward_info['is_inference'] = False
 
             if args.local_rank == 0:
                 logger.update_epoch(epoch, acc)
