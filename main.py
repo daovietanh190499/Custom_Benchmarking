@@ -27,7 +27,6 @@ from train import train_loop, load_checkpoint, benchmark_train_loop, benchmark_i
 from evaluate import evaluate
 import wandb
 import torch.cuda.profiler as profiler
-import pyprof2
 
 # Apex imports
 try:
@@ -330,7 +329,6 @@ def train(train_loop_func, logger, args):
         if args.distributed and args.model=="Unet3D":
             train_dataloader.sampler.set_epoch(epoch)
         if args.profile and args.profile_type == "nsys":
-            pyprof2.init()
             with torch.autograd.profiler.emit_nvtx():
                 iteration = train_loop_func(model, model_func, loss_func, scaler, epoch, optimizer, train_dataloader, val_dataloader, iteration, logger, run_info, forward_info)
         else:
