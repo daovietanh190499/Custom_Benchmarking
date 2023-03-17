@@ -15,6 +15,7 @@
 import torch
 import time
 import torch.cuda.profiler as profiler
+import torch.profiler
 
 def train_loop(model, model_func, loss_func, scaler, epoch, optim, train_dataloader, val_dataloader, iteration, logger, run_info, forward_info):
     for nbatch, data in enumerate(train_dataloader):
@@ -42,18 +43,29 @@ def benchmark_train_loop(model, model_func, loss_func, scaler, epoch, optim, tra
     start_time = None
     # tensor for results
     result_ = torch.zeros((1,)).cuda()
+    if run_info.profile and run_info.profile_type == 'tensorboard':
+        prof = torch.profiler.profile(
+            schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(run_info.tensorboard_log, worker_name='worker0'),
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True
+        )
+    if epoch==0 and run_info.profile and run_info.profile_type == 'tensorboard':
+        prof.start()
+    
     for nbatch, data in enumerate(loop(train_dataloader, run_info.reset_data)):
         if iteration >= run_info.benchmark_warmup:
             torch.cuda.synchronize()
             start_time = time.time()
-        if iteration == run_info.benchmark_warmup + 1 and run_info.profile:
+        if iteration == run_info.benchmark_warmup + 1 and run_info.profile and run_info.profile_type == 'nsys':
             profiler.start()
 
         with torch.cuda.amp.autocast(enabled=run_info.amp):
             result = model_func(model, data, forward_info)
             loss = loss_func(result)
         
-        if iteration == run_info.benchmark_warmup + 1 and run_info.profile:
+        if iteration == run_info.benchmark_warmup + 1 and run_info.profile and run_info.profile_type == 'nsys':
             profiler.stop()
 
         if run_info.warmup is not None:
@@ -70,7 +82,13 @@ def benchmark_train_loop(model, model_func, loss_func, scaler, epoch, optim, tra
         if iteration >= run_info.benchmark_warmup:
             torch.cuda.synchronize()
             logger.update(run_info.batch_size*run_info.N_gpu, time.time() - start_time)
+
+        if epoch==0 and run_info.profile and run_info.profile_type == 'tensorboard':
+            prof.step()
         iteration += 1
+
+    if epoch==0 and run_info.profile and run_info.profile_type == 'tensorboard':
+        prof.stop()
 
     result_.data[0] = logger.print_result()
     if run_info.N_gpu > 1:

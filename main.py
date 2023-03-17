@@ -39,7 +39,7 @@ except ImportError:
 #torchrun --nproc_per_node=1 main.py --batch-size 32 --mode benchmark-training --benchmark-warmup 100 --benchmark-iterations 200 --data /coco --json-summary /results/log_a100_fp16.log
 #nsys profile --show-output=true --export sqlite -o /results/test python main.py --batch-size 32 --mode benchmark-training --benchmark-warmup 100 --benchmark-iterations 200 --data /coco --no-amp --profile
 #docker run --rm -it --gpus=all --ipc=host -v /home/hpc/DeepLearningExamples/PyTorch/Segmentation/MaskRCNN/data:/coco -v /home/hpc/DeepLearningExamples/PyTorch/results:/results nvidia_universal_benchmark
-#docker run --rm -it --gpus device=0 --ipc=host -v /home/hpc/DeepLearningExamples/PyTorch/Segmentation/MaskRCNN/data:/coco -v /home/hpc/DeepLearningExamples/PyTorch/results:/results nvidia_universal_benchmark
+#docker run --rm -it --gpus device=0 --ipc=host -v /home/hpc/coco:/coco -v /home/hpc/results:/results nvidia_universal_benchmark
 #torchrun --nproc_per_node=1 main.py --model Unet3D --batch-size 2 --eval-batch-size 1 --mode benchmark-training --benchmark-warmup 100 --benchmark-iterations 200 --data /data --json-summary /results/log_unet3d_a100_fp16.log
 
 def make_parser():
@@ -111,6 +111,9 @@ def make_parser():
     parser.add_argument('--json-summary', type=str, default=None,
                         help='If provided, the json summary will be written to'
                              'the specified file.')
+    parser.add_argument('--tensorboard-log', type=str, dest='tensorboard_log', default=None,
+                        help='If provided, the tensorboard log will be written to'
+                             'the specified file.')
 
     # Distributed
     parser.add_argument('--local_rank', default=os.getenv('LOCAL_RANK',0), type=int,
@@ -119,6 +122,8 @@ def make_parser():
 
     parser.add_argument('--profile', dest='profile', action="store_true",
                         help='Used for profiling GPU')
+    parser.add_argument('--profile-type', type=str, dest='profile_type', default='tensorboard',
+                        choices=['nsys', 'tensorboard'])
 
     return parser
 
@@ -157,7 +162,8 @@ def train(train_loop_func, logger, args):
     args.distributed = False
     if 'WORLD_SIZE' in os.environ:
         args.distributed = int(os.environ['WORLD_SIZE']) > 1
-    args.world_size = int(os.environ['WORLD_SIZE'])
+        args.world_size = int(os.environ['WORLD_SIZE'])
+    args.world_size = 1
 
     if args.distributed:
         torch.cuda.set_device(args.local_rank)
@@ -303,6 +309,8 @@ def train(train_loop_func, logger, args):
         distributed =  args.distributed
         reset_data = args.model == 'SSD300'
         profile = args.profile
+        profile_type = args.profile_type
+        tensorboard_log = args.tensorboard_log
     run_info = RunInfo()
 
     if args.mode == 'evaluation':
@@ -319,7 +327,7 @@ def train(train_loop_func, logger, args):
         start_epoch_time = time.time()
         if args.distributed and args.model=="Unet3D":
             train_dataloader.sampler.set_epoch(epoch)
-        if args.profile:
+        if args.profile and args.profile_type == "nsys":
             pyprof2.init()
             with torch.autograd.profiler.emit_nvtx():
                 iteration = train_loop_func(model, model_func, loss_func, scaler, epoch, optimizer, train_dataloader, val_dataloader, iteration, logger, run_info, forward_info)
@@ -384,6 +392,9 @@ def log_params(logger, args):
         "num workers": args.num_workers,
         "AMP": args.amp,
         "precision": 'amp' if args.amp else 'fp32',
+        "tensorboard_log": args.tensorboard_log,
+        "profile": args.profile,
+        "profile_type": args.profile_type
     })
 
 if __name__ == "__main__":
