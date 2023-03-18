@@ -23,52 +23,52 @@ from pycocotools.coco import COCO
 #DALI import
 from ssd.coco_pipeline import COCOPipeline, DALICOCOIterator
 
-def get_train_dataloader(args, local_seed):
-    train_annotate = os.path.join(args.data, "annotations/instances_train2017.json")
-    train_coco_root = os.path.join(args.data, "train2017")
+def get_train_dataloader(data, batch_size, local_rank, N_gpu, amp, num_workers, local_seed):
+    train_annotate = os.path.join(data, "annotations/instances_train2017.json")
+    train_coco_root = os.path.join(data, "train2017")
 
-    train_pipe = COCOPipeline(batch_size=args.batch_size,
+    train_pipe = COCOPipeline(batch_size=batch_size,
         file_root=train_coco_root,
         annotations_file=train_annotate,
         default_boxes=dboxes300_coco(),
-        device_id=args.local_rank,
-        num_shards=args.N_gpu,
-        output_fp16=args.amp,
+        device_id=local_rank,
+        num_shards=N_gpu,
+        output_fp16=amp,
         output_nhwc=False,
         pad_output=False,
-        num_threads=args.num_workers, seed=local_seed)
+        num_threads=num_workers, seed=local_seed)
     train_pipe.build()
     test_run = train_pipe.schedule_run(), train_pipe.share_outputs(), train_pipe.release_outputs()
-    train_loader = DALICOCOIterator(train_pipe, 118287 / args.N_gpu)
+    train_loader = DALICOCOIterator(train_pipe, 118287 / N_gpu)
     return train_loader
 
 
-def get_val_dataset(args):
+def get_val_dataset(path):
     dboxes = dboxes300_coco()
     val_trans = SSDTransformer(dboxes, (300, 300), val=True)
 
-    val_annotate = os.path.join(args.data, "annotations/instances_val2017.json")
-    val_coco_root = os.path.join(args.data, "val2017")
+    val_annotate = os.path.join(path, "annotations/instances_val2017.json")
+    val_coco_root = os.path.join(path, "val2017")
 
     val_coco = COCODetection(val_coco_root, val_annotate, val_trans)
     return val_coco
 
 
-def get_val_dataloader(dataset, args):
-    if args.distributed:
+def get_val_dataloader(dataset, distributed, eval_batch_size, num_workers):
+    if distributed:
         val_sampler = torch.utils.data.distributed.DistributedSampler(dataset)
     else:
         val_sampler = None
 
     val_dataloader = DataLoader(dataset,
-                                batch_size=args.eval_batch_size,
+                                batch_size=eval_batch_size,
                                 shuffle=False,  # Note: distributed sampler is shuffled :(
                                 sampler=val_sampler,
-                                num_workers=args.num_workers)
+                                num_workers=num_workers)
 
     return val_dataloader
 
-def get_coco_ground_truth(args):
-    val_annotate = os.path.join(args.data, "annotations/instances_val2017.json")
+def get_coco_ground_truth(path):
+    val_annotate = os.path.join(path, "annotations/instances_val2017.json")
     cocoGt = COCO(annotation_file=val_annotate, use_ext=True)
     return cocoGt

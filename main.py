@@ -152,9 +152,9 @@ def train(train_loop_func, logger, args):
         from ssd.data import get_train_dataloader, get_val_dataset, get_val_dataloader, get_coco_ground_truth
         from ssd.func import model_func, post_process, eval_func
 
-        mean, std = generate_mean_std(args)
-        cocoGt = get_coco_ground_truth(args)
-        val_dataset = get_val_dataset(args)
+        mean, std = generate_mean_std()
+        cocoGt = get_coco_ground_truth(args.data)
+        val_dataset = get_val_dataset(args.data)
         dboxes = dboxes300_coco()
         encoder = Encoder(dboxes)
 
@@ -170,9 +170,18 @@ def train(train_loop_func, logger, args):
             'encoder': encoder
         }
 
-        train_dataloader = get_train_dataloader(args, args.seed - 2**31)
+        train_dataloader = get_train_dataloader(data=args.data, 
+                                                batch_size=args.batch_size, 
+                                                local_rank=args.local_rank, 
+                                                N_gpu=args.N_gpu, 
+                                                amp=args.amp, 
+                                                num_workers=args.num_workers, 
+                                                local_seed=args.seed - 2**31)
 
-        val_dataloader = get_val_dataloader(val_dataset, args)
+        val_dataloader = get_val_dataloader(val_dataset, 
+                                            distributed=args.distributed, 
+                                            eval_batch_size=args.eval_batch_size, 
+                                            num_workers=args.num_workers)
 
         model = SSD300(backbone=ResNet(backbone='resnet50',
                                         backbone_path=None,
