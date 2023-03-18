@@ -43,6 +43,7 @@ def benchmark_train_loop(model, model_func, loss_func, scaler, epoch, optim, tra
     start_time = None
     # tensor for results
     result_ = torch.zeros((1,)).cuda()
+
     if run_info.profile and run_info.profile_type == 'tensorboard':
         prof = torch.profiler.profile(
             schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
@@ -51,6 +52,7 @@ def benchmark_train_loop(model, model_func, loss_func, scaler, epoch, optim, tra
             profile_memory=True,
             with_stack=True
         )
+    
     if epoch==0 and run_info.profile and run_info.profile_type == 'tensorboard':
         prof.start()
     
@@ -58,6 +60,7 @@ def benchmark_train_loop(model, model_func, loss_func, scaler, epoch, optim, tra
         if iteration >= run_info.benchmark_warmup:
             torch.cuda.synchronize()
             start_time = time.time()
+        
         if iteration == run_info.benchmark_warmup + 1 and run_info.profile and run_info.profile_type == 'nsys':
             profiler.start()
 
@@ -93,8 +96,10 @@ def benchmark_train_loop(model, model_func, loss_func, scaler, epoch, optim, tra
     result_.data[0] = logger.print_result()
     if run_info.N_gpu > 1:
         torch.distributed.reduce(result_, 0)
+    
     if run_info.local_rank == 0:
         print('Training performance = {} FPS'.format(float(result_.data[0])))
+    
     return iteration
 
 
@@ -122,11 +127,11 @@ def benchmark_inference_loop(model, model_func, loss_func, scaler, epoch, optim,
         torch.cuda.synchronize()
         end_time = time.time()
 
-
         if i >= run_info.benchmark_warmup:
             logger.update(run_info.eval_batch_size, end_time - start_time)
 
     logger.print_result()
+
 
 def warmup(optim, warmup_iters, iteration, base_lr):
     if iteration < warmup_iters:

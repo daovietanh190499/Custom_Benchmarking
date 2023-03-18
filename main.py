@@ -19,6 +19,7 @@ import torch
 import numpy as np
 from torch.optim.lr_scheduler import MultiStepLR
 import torch.utils.data.distributed
+from torchsummary import summary
 
 from logger import Logger, BenchLogger
 import dllogger as DLLogger
@@ -26,7 +27,6 @@ import dllogger as DLLogger
 from train import train_loop, load_checkpoint, benchmark_train_loop, benchmark_inference_loop
 from evaluate import evaluate
 import wandb
-import torch.cuda.profiler as profiler
 
 # Apex imports
 try:
@@ -59,11 +59,6 @@ def make_parser():
                         help='manually set random seed for torch')
     parser.add_argument('--checkpoint', type=str, default=None,
                         help='path to model checkpoint file')
-    #==================
-    parser.add_argument('--torchvision-weights-version', type=str, default="IMAGENET1K_V2",
-                        choices=['IMAGENET1K_V1', 'IMAGENET1K_V2', 'DEFAULT'],
-                        help='The torchvision weights version to use when --checkpoint is not specified')
-    #==================
     parser.add_argument('--save', type=str, default=None,
                         help='save model checkpoints in the specified directory')
     parser.add_argument('--mode', type=str, default='training',
@@ -81,20 +76,12 @@ def make_parser():
     parser.add_argument('--weight-decay', '--wd', type=float, default=0.0005,
                         help='momentum argument for SGD optimizer')
 
+    # Benchmark
     parser.add_argument('--warmup', type=int, default=None)
     parser.add_argument('--benchmark-iterations', type=int, default=20, metavar='N',
                         help='Run N iterations while benchmarking (ignored when training and validation)')
     parser.add_argument('--benchmark-warmup', type=int, default=20, metavar='N',
                         help='Number of warmup iterations for benchmarking')
-    #==================================
-    parser.add_argument('--backbone', type=str, default='resnet50',
-                        choices=['resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152'])
-    parser.add_argument('--backbone-path', type=str, default=None,
-                        help='Path to chekcpointed backbone. It should match the'
-                             ' backbone model declared with the --backbone argument.'
-                             ' When it is not provided, pretrained model from torchvision'
-                             ' will be downloaded.')
-    #==================================
     parser.add_argument('--num-workers', type=int, default=8)
     parser.add_argument("--amp", dest='amp', action="store_true",
                         help="Enable Automatic Mixed Precision (AMP).")
@@ -106,10 +93,6 @@ def make_parser():
     parser.add_argument("--no-allow-tf32", dest='allow_tf32', action="store_false",
                         help="Disable TF32 computations.")
     parser.set_defaults(allow_tf32=True)
-    #==================
-    parser.add_argument('--data-layout', default="channels_last", choices=['channels_first', 'channels_last'],
-                        help="Model data layout. It's recommended to use channels_first with --no-amp")
-    #==================
     parser.add_argument('--log-interval', type=int, default=20,
                         help='Logging interval.')
     parser.add_argument('--json-summary', type=str, default=None,
@@ -124,6 +107,7 @@ def make_parser():
                         help='Used for multi-process training. Can either be manually set ' +
                              'or automatically set by using \'python -m multiproc\'.')
 
+    # Profiling
     parser.add_argument('--profile', dest='profile', action="store_true",
                         help='Used for profiling GPU')
     parser.add_argument('--profile-type', type=str, dest='profile_type', default='tensorboard',
@@ -133,64 +117,34 @@ def make_parser():
 
     return parser
 
-from threading import Thread
-import subprocess
-import re
-import time
-from torchsummary import summary
-
-total_GPU = 0
-total_times = 0
-
-def GPU_Usage(running):
-    global total_GPU, total_times
-    command = 'nvidia-smi'
-    while True:
-        p = subprocess.check_output(command)
-        ram_using = re.findall(r'\b\d+MiB+ /', str(p))[0][:-5]
-        total_GPU += int(ram_using)
-        total_times += 1
-        if total_GPU == 0:
-            total_times -= 1
-        if total_GPU == 0 or not running():
-            break
-        time.sleep(1)
 
 def train(train_loop_func, logger, args):
-    global total_GPU, total_times
     # Check that GPUs are actually available
     use_cuda = not args.no_cuda
 
-    running_threads = True
-    threads = Thread(target=GPU_Usage, args=(lambda : running_threads, ))
-
     # Setup multi-GPU if necessary
     args.distributed = False
+    args.world_size = 1
+    args.seed = np.random.randint(1e4) if not args.seed else args.seed
     if 'WORLD_SIZE' in os.environ:
         args.distributed = int(os.environ['WORLD_SIZE']) > 1
         args.world_size = int(os.environ['WORLD_SIZE'])
-    args.world_size = 1
 
     if args.distributed:
         torch.cuda.set_device(args.local_rank)
         torch.distributed.init_process_group(backend='nccl', init_method='env://')
         args.N_gpu = torch.distributed.get_world_size()
+        args.seed = (args.seed + torch.distributed.get_rank()) % 2**32
     else:
         args.N_gpu = 1
 
-    if args.seed is None:
-        args.seed = np.random.randint(1e4)
-
-    if args.distributed:
-        args.seed = (args.seed + torch.distributed.get_rank()) % 2**32
     print("Using seed = {}".format(args.seed))
     torch.manual_seed(args.seed)
     np.random.seed(seed=args.seed)
     args.learning_rate = args.learning_rate * args.N_gpu * (args.batch_size / 32)
 
 
-    # Setup data, defaults
-    # special running config for special type of model, model self-defined
+    # SSD300
     #================================================================================================================================================================
     if args.model == "SSD300":
         from ssd.model import SSD300, ResNet, Loss
@@ -207,10 +161,10 @@ def train(train_loop_func, logger, args):
         # MUST HAVE PARAMETER
         forward_info = {
             'is_inference': args.mode in [ 'evaluation', 'benchmark-inference'],
-            'no_cuda':args.no_cuda,
-            'data_layout':args.data_layout,
-            'mean':mean,
-            'std':std,
+            'no_cuda': args.no_cuda,
+            'data_layout':"channels_last",
+            'mean': mean,
+            'std': std,
             'cocoGt': cocoGt,
             'val_dataset': val_dataset,
             'encoder': encoder
@@ -220,9 +174,9 @@ def train(train_loop_func, logger, args):
 
         val_dataloader = get_val_dataloader(val_dataset, args)
 
-        model = SSD300(backbone=ResNet(backbone=args.backbone,
-                                        backbone_path=args.backbone_path,
-                                        weights=args.torchvision_weights_version))
+        model = SSD300(backbone=ResNet(backbone='resnet50',
+                                        backbone_path=None,
+                                        weights='IMAGENET1K_V2'))
         summary(model.cuda(), (3,300,300), device='cuda')
 
         loss_func = Loss(dboxes)
@@ -233,7 +187,7 @@ def train(train_loop_func, logger, args):
         scheduler = MultiStepLR(optimizer=optimizer, milestones=args.multistep, gamma=0.1)
     #================================================================================================================================================================
 
-    #U-Net3D
+    # U-Net3D
     #================================================================================================================================================================
     elif args.model == "Unet3D":
         from unet3d.unet3d import Unet3D
@@ -299,8 +253,6 @@ def train(train_loop_func, logger, args):
             print('Provided checkpoint is not path to a file')
             return
 
-    total_time = 0
-
     # common train/inference config for all types of model
     class RunInfo:
         amp= args.amp
@@ -323,58 +275,60 @@ def train(train_loop_func, logger, args):
         acc = evaluate(model, model_func, post_process, eval_func, val_dataloader, run_info, forward_info)
         if args.local_rank == 0:
             print('Model precision {} mAP'.format(acc))
-        return
+    else:
+        scaler = torch.cuda.amp.GradScaler(enabled=args.amp)
 
-    scaler = torch.cuda.amp.GradScaler(enabled=args.amp)
-
-    threads.start()
-    for epoch in range(start_epoch, args.epochs):
-        start_epoch_time = time.time()
-        if args.distributed and args.model=="Unet3D":
-            train_dataloader.sampler.set_epoch(epoch)
-        if args.profile and args.profile_type == "nsys":
-            with torch.autograd.profiler.emit_nvtx():
+        for epoch in range(start_epoch, args.epochs):
+            start_epoch_time = time.time()
+            
+            if args.distributed and args.model=="Unet3D":
+                train_dataloader.sampler.set_epoch(epoch)
+            
+            if args.profile and args.profile_type == "nsys":
+                with torch.autograd.profiler.emit_nvtx():
+                    iteration = train_loop_func(model, model_func, loss_func, scaler, epoch, optimizer, train_dataloader, val_dataloader, iteration, logger, run_info, forward_info)
+            else:
                 iteration = train_loop_func(model, model_func, loss_func, scaler, epoch, optimizer, train_dataloader, val_dataloader, iteration, logger, run_info, forward_info)
-        else:
-            iteration = train_loop_func(model, model_func, loss_func, scaler, epoch, optimizer, train_dataloader, val_dataloader, iteration, logger, run_info, forward_info)
-        if args.mode in ["training", "benchmark-training"]:
-            scheduler.step()
-        end_epoch_time = time.time() - start_epoch_time
-        total_time += end_epoch_time
-
-        if args.local_rank == 0:
-            logger.update_epoch_time(epoch, end_epoch_time)
-
-        if epoch in args.evaluation:
-            acc = evaluate(model, model_func, post_process, eval_func, val_dataloader, run_info, forward_info)
+            
+            if args.mode in ["training", "benchmark-training"]:
+                scheduler.step()
+            
+            end_epoch_time = time.time() - start_epoch_time
+            total_time += end_epoch_time
 
             if args.local_rank == 0:
-                logger.update_epoch(epoch, acc)
+                logger.update_epoch_time(epoch, end_epoch_time)
 
-        if args.save and args.local_rank == 0:
-            print("saving model...")
-            obj = {'epoch': epoch + 1,
-                   'iteration': iteration,
-                   'optimizer': optimizer.state_dict(),
-                   'scheduler': scheduler.state_dict(),}
-            if args.distributed:
-                obj['model'] = model.module.state_dict()
-            else:
-                obj['model'] = model.state_dict()
-            os.makedirs(args.save, exist_ok=True)
-            save_path = os.path.join(args.save, f'epoch_{epoch}.pt')
-            torch.save(obj, save_path)
-            logger.log('model path', save_path)
-        if run_info.reset_data:
-            train_dataloader.reset()
-    running_threads = False
-    threads.join()
-    DLLogger.log((), { 'total time': total_time, 'total_GPU': total_GPU/total_times if total_times != 0 else 0 })
-    logger.log_summary()
+            if epoch in args.evaluation:
+                acc = evaluate(model, model_func, post_process, eval_func, val_dataloader, run_info, forward_info)
+                if args.local_rank == 0:
+                    logger.update_epoch(epoch, acc)
+
+            if args.save and args.local_rank == 0:
+                print("saving model...")
+                obj = {'epoch': epoch + 1,
+                    'iteration': iteration,
+                    'optimizer': optimizer.state_dict(),
+                    'scheduler': scheduler.state_dict(),}
+                if args.distributed:
+                    obj['model'] = model.module.state_dict()
+                else:
+                    obj['model'] = model.state_dict()
+                os.makedirs(args.save, exist_ok=True)
+                save_path = os.path.join(args.save, f'epoch_{epoch}.pt')
+                torch.save(obj, save_path)
+                logger.log('model path', save_path)
+            
+            if run_info.reset_data:
+                train_dataloader.reset()
+
+        DLLogger.log((), { 'total time': total_time })
+        logger.log_summary()
 
 
 def log_params(logger, args):
     logger.log_params({
+        "model": args.model,
         "dataset path": args.data,
         "epochs": args.epochs,
         "batch size": args.batch_size,
@@ -389,14 +343,14 @@ def log_params(logger, args):
         "momentum": args.momentum,
         "weight decay": args.weight_decay,
         "lr warmup": args.warmup,
-        "backbone": args.backbone,
-        "backbone path": args.backbone_path,
         "num workers": args.num_workers,
         "AMP": args.amp,
-        "precision": 'amp' if args.amp else 'fp32',
+        "allow-tf32": args.allow_tf32,
+        "precision": 'amp fp16' if args.amp else 'fp32',
         "tensorboard_log": args.tensorboard_log,
         "profile": args.profile,
-        "profile_type": args.profile_type
+        "profile_type": args.profile_type,
+        "wandb": args.wandb
     })
 
 if __name__ == "__main__":

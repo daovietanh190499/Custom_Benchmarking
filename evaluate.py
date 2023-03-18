@@ -93,5 +93,5 @@ def evaluate(model, model_func, post_process, eval_func, val_dataloader, eval_in
     # put your model in training mode back on
     model.train()
 
-    return eval_res  # Average Precision  (AP) @[ IoU=050:0.95 | area=   all | maxDets=100 ]
+    return eval_res
 
