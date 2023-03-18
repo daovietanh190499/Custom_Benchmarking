@@ -35,9 +35,8 @@ except ImportError:
     raise ImportError("Please install APEX from https://github.com/nvidia/apex")
 
 
-#torchrun --nproc_per_node=1 main.py --batch-size 32 --mode benchmark-training --benchmark-warmup 100 --benchmark-iterations 200 --data /coco --json-summary /results/log_a100_fp16.log
-#nsys profile --show-output=true --export sqlite -o /results/test python main.py --batch-size 32 --mode benchmark-training --benchmark-warmup 100 --benchmark-iterations 200 --data /coco --no-amp --profile
-#docker run --rm -it --gpus=all --ipc=host -v /home/hpc/DeepLearningExamples/PyTorch/Segmentation/MaskRCNN/data:/coco -v /home/hpc/DeepLearningExamples/PyTorch/results:/results nvidia_universal_benchmark
+#nsys profile --show-output=true --export sqlite -o /results/test python main.py --model SSD300 --batch-size 32 --mode benchmark-training --benchmark-warmup 100 --benchmark-iterations 200 --data /coco --profile
+#docker run --rm -it --gpus=all --ipc=host -v /home/hpc/coco:/coco -v /home/hpc/results:/results nvidia_universal_benchmark
 #docker run --rm -it --gpus device=0 --ipc=host -v /home/hpc/coco:/coco -v /home/hpc/results:/results nvidia_universal_benchmark
 #torchrun --nproc_per_node=1 main.py --model Unet3D --batch-size 2 --eval-batch-size 1 --mode benchmark-training --benchmark-warmup 100 --benchmark-iterations 200 --data /data --json-summary /results/log_unet3d_a100_fp16.log
 
@@ -280,6 +279,7 @@ def train(train_loop_func, logger, args):
         tensorboard_log = args.tensorboard_log
     run_info = RunInfo()
 
+    total_time = 0
     if args.mode == 'evaluation':
         acc = evaluate(model, model_func, post_process, eval_func, val_dataloader, run_info, forward_info)
         if args.local_rank == 0:
