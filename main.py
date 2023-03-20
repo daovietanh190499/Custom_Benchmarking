@@ -19,6 +19,7 @@ import torch
 import numpy as np
 from torch.optim.lr_scheduler import MultiStepLR
 import torch.utils.data.distributed
+import torchvision.models as models
 from torchsummary import summary
 
 from logger import Logger, BenchLogger
@@ -238,6 +239,43 @@ def train(train_loop_func, logger, args):
         scheduler = MultiStepLR(optimizer=optimizer, milestones=args.multistep, gamma=0.1)
 
     #===================================================================================================================================================================
+    
+    # Resnet
+    #================================================================================================================================================================
+    elif args.model == "ResNet":
+        from resnet.dataloader import get_data_loaders
+        from resnet.func import model_func, post_process, eval_func
+
+        # MUST HAVE PARAMETER
+        forward_info = {
+            'is_inference': args.mode in [ 'evaluation', 'benchmark-inference'],
+            'no_cuda': args.no_cuda,
+        }
+
+        train_dataloader, val_dataloader = get_data_loaders(data=args.data,
+                                                            batch_size=args.batch_size,
+                                                            val_batch_size=args.eval_batch_size,
+                                                            workers=args.num_workers,
+                                                            local_rank=args.local_rank,
+                                                            seed=args.seed,
+                                                            world_size=args.world_size)
+
+        model = models.resnet50()
+
+        class CELoss(torch.nn.Module):
+            def forward(self, result):
+                output, target = result
+                return torch.nn.CrossEntropyLoss()(output, target)
+        
+        loss_func = CELoss()
+
+        optimizer = torch.optim.SGD(model.parameters(), lr=args.learning_rate, momentum=args.momentum, nesterov=True,
+                        weight_decay=args.weight_decay)
+
+        scheduler = MultiStepLR(optimizer=optimizer, milestones=args.multistep, gamma=0.1)
+
+    #===================================================================================================================================================================
+
     start_epoch = 0
     iteration = 0
 
